@@ -1,0 +1,26 @@
+[package]
+name = "environs"
+version = "1.0.0"
+edition = "2024"
+description = "typed environment variable resolution with fallback key chains"
+license = "MIT"
+repository = "https://github.com/brianbruggeman/environs"
+keywords = ["env", "environment", "config", "dotenv", "configuration"]
+categories = ["config"]
+
+[dependencies]
+thiserror = "2"
+tracing = "0.1"
+falsehoods = { version = "1.0.0", path = "../truthful" }
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
+[dev-dependencies]
+rstest = "0.26.1"
+temp-env = "0.3.6"
+tempfile = "3.25.0"
