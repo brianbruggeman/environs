@@ -11,7 +11,7 @@ categories = ["config"]
 [dependencies]
 thiserror = "2"
 tracing = "0.1"
-falsehoods = { version = "1.0.0", path = "../truthful" }
+falsehoods = "1.0.0"
 chrono = { version = "0.4.43", optional = true }
 
 [lints.rust]

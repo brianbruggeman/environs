@@ -111,6 +111,8 @@ dependencies = [
 [[package]]
 name = "falsehoods"
 version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "407b624a421e6705074d9fcc6c21aa475b9fb5754281249612a69f9d5232d33a"
 
 [[package]]
 name = "fastrand"
