@@ -290,6 +290,51 @@ mod tests {
     }
 
     #[test]
+    fn line_with_no_equals_is_skipped() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let env_path = write_env_file(dir.path(), ".env", "JUST_A_KEY\nTEST_OWN_NOEQ=present\n");
+
+        temp_env::with_vars([("TEST_OWN_NOEQ", None::<&str>)], || {
+            load_path(&env_path).unwrap_or_else(|err| panic!("load_path failed: {err}"));
+            assert_eq!(std::env::var("TEST_OWN_NOEQ").ok(), Some("present".to_owned()));
+            assert!(std::env::var("JUST_A_KEY").is_err());
+        });
+    }
+
+    #[test]
+    fn whitespace_around_equals_is_trimmed() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let env_path = write_env_file(dir.path(), ".env", "TEST_OWN_WS_EQ = spaced_value\n");
+
+        temp_env::with_vars([("TEST_OWN_WS_EQ", None::<&str>)], || {
+            load_path(&env_path).unwrap_or_else(|err| panic!("load_path failed: {err}"));
+            assert_eq!(std::env::var("TEST_OWN_WS_EQ").ok(), Some("spaced_value".to_owned()));
+        });
+    }
+
+    #[test]
+    fn unclosed_quote_returns_rest_of_value() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let env_path = write_env_file(dir.path(), ".env", "TEST_OWN_UNCLOSED=\"unterminated\n");
+
+        temp_env::with_vars([("TEST_OWN_UNCLOSED", None::<&str>)], || {
+            load_path(&env_path).unwrap_or_else(|err| panic!("load_path failed: {err}"));
+            assert_eq!(std::env::var("TEST_OWN_UNCLOSED").ok(), Some("unterminated".to_owned()));
+        });
+    }
+
+    #[test]
+    fn whitespace_only_value_produces_empty_string() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let env_path = write_env_file(dir.path(), ".env", "TEST_OWN_WSVAL=   \n");
+
+        temp_env::with_vars([("TEST_OWN_WSVAL", None::<&str>)], || {
+            load_path(&env_path).unwrap_or_else(|err| panic!("load_path failed: {err}"));
+            assert_eq!(std::env::var("TEST_OWN_WSVAL").ok(), Some(String::new()));
+        });
+    }
+
+    #[test]
     fn value_with_equals_sign() {
         let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
         let env_path = write_env_file(dir.path(), ".env", "TEST_OWN_EQ=postgres://user:pass@host/db?opt=val\n");

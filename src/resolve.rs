@@ -222,6 +222,15 @@ mod tests {
     }
 
     #[test]
+    fn empty_keys_returns_not_found_with_empty_string() {
+        let result = resolve::<String>(&[]);
+        match result {
+            Err(Error::NotFound { keys, .. }) => assert_eq!(keys, ""),
+            other => panic!("expected NotFound with empty keys, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn or_else_accepts_fn_pointer() {
         fn default_port() -> u16 {
             8080
