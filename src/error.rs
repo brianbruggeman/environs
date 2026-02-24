@@ -2,10 +2,17 @@ use std::path::PathBuf;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct Location {
     pub file: &'static str,
     pub line: u32,
+}
+
+impl Location {
+    pub fn new(file: &'static str, line: u32) -> Self {
+        Self { file, line }
+    }
 }
 
 impl std::fmt::Display for Location {
@@ -14,6 +21,7 @@ impl std::fmt::Display for Location {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{location}none of [{keys}] found in environment")]

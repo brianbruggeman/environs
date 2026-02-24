@@ -15,6 +15,7 @@ pub trait FromEnvStr: Sized {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug)]
 pub struct BoolParseError {
     value: String,
@@ -90,6 +91,7 @@ impl FromEnvStr for PathBuf {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug)]
 pub struct VecParseError {
     index: usize,
@@ -123,6 +125,9 @@ impl<T: FromEnvStr> FromEnvStr for Option<T> {
         Ok(None)
     }
 }
+
+#[cfg(feature = "chrono")]
+pub use chrono_impls::ChronoParseError;
 
 #[cfg(feature = "chrono")]
 mod chrono_impls {
@@ -400,6 +405,32 @@ mod tests {
     fn vec_bool_via_truthful() {
         let result = Vec::<bool>::from_env_str("yes,no,true,false");
         assert_eq!(result.ok(), Some(vec![true, false, true, false]));
+    }
+
+    #[test]
+    fn option_string_with_empty_string_returns_some_empty() {
+        let result = Option::<String>::from_env_str("");
+        assert_eq!(result.ok(), Some(Some(String::new())));
+    }
+
+    #[test]
+    fn option_u16_with_empty_string_returns_parse_error() {
+        let result = Option::<u16>::from_env_str("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn vec_string_with_trailing_comma_includes_empty_element() {
+        let result = Vec::<String>::from_env_str("a,b,");
+        assert_eq!(result.ok(), Some(vec!["a".to_owned(), "b".to_owned(), String::new()]));
+    }
+
+    #[test]
+    fn vec_i32_with_trailing_comma_returns_parse_error() {
+        let result = Vec::<i32>::from_env_str("1,2,");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.index, 2);
     }
 
     #[cfg(feature = "chrono")]
