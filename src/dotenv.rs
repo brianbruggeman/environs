@@ -100,6 +100,82 @@ pub fn load_override_path(path: &Path) -> crate::error::Result<()> {
     apply_entries(path, true)
 }
 
+struct DotenvEntry {
+    path: PathBuf,
+    required: bool,
+    override_existing: Option<bool>,
+}
+
+#[derive(Default)]
+pub struct DotenvLoader {
+    entries: Vec<DotenvEntry>,
+    default_override: bool,
+}
+
+impl DotenvLoader {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// add an optional file; inherits the loader's default override mode
+    pub fn path(mut self, path: impl AsRef<Path>) -> Self {
+        self.entries.push(DotenvEntry {
+            path: path.as_ref().to_path_buf(),
+            required: false,
+            override_existing: None,
+        });
+        self
+    }
+
+    /// add a required file; inherits the loader's default override mode
+    pub fn require(mut self, path: impl AsRef<Path>) -> Self {
+        self.entries.push(DotenvEntry {
+            path: path.as_ref().to_path_buf(),
+            required: true,
+            override_existing: None,
+        });
+        self
+    }
+
+    /// add an optional file that explicitly overrides existing env vars
+    pub fn override_path(mut self, path: impl AsRef<Path>) -> Self {
+        self.entries.push(DotenvEntry {
+            path: path.as_ref().to_path_buf(),
+            required: false,
+            override_existing: Some(true),
+        });
+        self
+    }
+
+    /// add an optional file that explicitly never overrides existing env vars
+    pub fn supplement(mut self, path: impl AsRef<Path>) -> Self {
+        self.entries.push(DotenvEntry {
+            path: path.as_ref().to_path_buf(),
+            required: false,
+            override_existing: Some(false),
+        });
+        self
+    }
+
+    /// set the default override mode for all entries that don't specify one
+    pub fn override_existing(mut self) -> Self {
+        self.default_override = true;
+        self
+    }
+
+    pub fn load(self) -> crate::error::Result<()> {
+        for entry in self.entries {
+            let do_override = entry.override_existing.unwrap_or(self.default_override);
+            if entry.required || entry.path.exists() {
+                apply_entries(&entry.path, do_override)?;
+            } else {
+                tracing::debug!(path = %entry.path.display(), "dotenv file not found, skipping");
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -342,6 +418,216 @@ mod tests {
         temp_env::with_vars([("TEST_OWN_EQ", None::<&str>)], || {
             load_path(&env_path).unwrap_or_else(|err| panic!("load_path failed: {err}"));
             assert_eq!(std::env::var("TEST_OWN_EQ").ok(), Some("postgres://user:pass@host/db?opt=val".to_owned()));
+        });
+    }
+
+    #[test]
+    fn empty_key_returns_parse_error() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let env_path = write_env_file(dir.path(), ".env", "=orphaned_value\n");
+
+        let result = load_path(&env_path);
+        assert!(matches!(result, Err(Error::DotenvParse { .. })));
+    }
+
+    #[test]
+    fn builder_single_optional_path_loads_vars() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let env_path = write_env_file(dir.path(), ".env", "TEST_BLD_SINGLE=hello\n");
+
+        temp_env::with_vars([("TEST_BLD_SINGLE", None::<&str>)], || {
+            DotenvLoader::new()
+                .path(&env_path)
+                .load()
+                .unwrap_or_else(|err| panic!("loader failed: {err}"));
+            assert_eq!(std::env::var("TEST_BLD_SINGLE").ok(), Some("hello".to_owned()));
+        });
+    }
+
+    #[test]
+    fn builder_missing_optional_path_is_skipped() {
+        let result = DotenvLoader::new().path("/tmp/nonexistent_environs_test/nope.env").load();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn builder_required_path_loads_vars() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let env_path = write_env_file(dir.path(), ".env", "TEST_BLD_REQ=required_val\n");
+
+        temp_env::with_vars([("TEST_BLD_REQ", None::<&str>)], || {
+            DotenvLoader::new()
+                .require(&env_path)
+                .load()
+                .unwrap_or_else(|err| panic!("loader failed: {err}"));
+            assert_eq!(std::env::var("TEST_BLD_REQ").ok(), Some("required_val".to_owned()));
+        });
+    }
+
+    #[test]
+    fn builder_required_path_missing_returns_error() {
+        let result = DotenvLoader::new().require("/tmp/nonexistent_environs_test/nope.env").load();
+        assert!(matches!(result, Err(Error::DotenvLoad { .. })));
+    }
+
+    #[test]
+    fn builder_multiple_paths_all_loaded() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let first = write_env_file(dir.path(), ".env", "TEST_BLD_MULTI_A=alpha\n");
+        let second = write_env_file(dir.path(), ".env.local", "TEST_BLD_MULTI_B=beta\n");
+
+        temp_env::with_vars([("TEST_BLD_MULTI_A", None::<&str>), ("TEST_BLD_MULTI_B", None::<&str>)], || {
+            DotenvLoader::new()
+                .path(&first)
+                .path(&second)
+                .load()
+                .unwrap_or_else(|err| panic!("loader failed: {err}"));
+            assert_eq!(std::env::var("TEST_BLD_MULTI_A").ok(), Some("alpha".to_owned()));
+            assert_eq!(std::env::var("TEST_BLD_MULTI_B").ok(), Some("beta".to_owned()));
+        });
+    }
+
+    #[test]
+    fn builder_later_path_does_not_override_by_default() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let base = write_env_file(dir.path(), ".env", "TEST_BLD_ORDER=base\n");
+        let local = write_env_file(dir.path(), ".env.local", "TEST_BLD_ORDER=local\n");
+
+        temp_env::with_vars([("TEST_BLD_ORDER", None::<&str>)], || {
+            DotenvLoader::new()
+                .path(&base)
+                .path(&local)
+                .load()
+                .unwrap_or_else(|err| panic!("loader failed: {err}"));
+            assert_eq!(std::env::var("TEST_BLD_ORDER").ok(), Some("base".to_owned()));
+        });
+    }
+
+    #[test]
+    fn builder_override_existing_replaces_vars() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let env_path = write_env_file(dir.path(), ".env", "TEST_BLD_OVR=from_file\n");
+
+        temp_env::with_vars([("TEST_BLD_OVR", Some("original"))], || {
+            DotenvLoader::new()
+                .path(&env_path)
+                .override_existing()
+                .load()
+                .unwrap_or_else(|err| panic!("loader failed: {err}"));
+            assert_eq!(std::env::var("TEST_BLD_OVR").ok(), Some("from_file".to_owned()));
+        });
+    }
+
+    #[test]
+    fn builder_no_override_preserves_existing() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let env_path = write_env_file(dir.path(), ".env", "TEST_BLD_NO_OVR=from_file\n");
+
+        temp_env::with_vars([("TEST_BLD_NO_OVR", Some("original"))], || {
+            DotenvLoader::new()
+                .path(&env_path)
+                .load()
+                .unwrap_or_else(|err| panic!("loader failed: {err}"));
+            assert_eq!(std::env::var("TEST_BLD_NO_OVR").ok(), Some("original".to_owned()));
+        });
+    }
+
+    #[test]
+    fn builder_parse_error_propagates() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let env_path = write_env_file(dir.path(), ".env", "=bad_key\n");
+
+        let result = DotenvLoader::new().path(&env_path).load();
+        assert!(matches!(result, Err(Error::DotenvParse { .. })));
+    }
+
+    #[test]
+    fn builder_empty_load_is_ok() {
+        assert!(DotenvLoader::new().load().is_ok());
+    }
+
+    #[test]
+    fn builder_override_path_replaces_existing() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let env_path = write_env_file(dir.path(), ".env", "TEST_BLD_OVR_PATH=from_file\n");
+
+        temp_env::with_vars([("TEST_BLD_OVR_PATH", Some("original"))], || {
+            DotenvLoader::new()
+                .override_path(&env_path)
+                .load()
+                .unwrap_or_else(|err| panic!("loader failed: {err}"));
+            assert_eq!(std::env::var("TEST_BLD_OVR_PATH").ok(), Some("from_file".to_owned()));
+        });
+    }
+
+    #[test]
+    fn builder_override_path_missing_is_skipped() {
+        let result = DotenvLoader::new()
+            .override_path("/tmp/nonexistent_environs_test/nope.env")
+            .load();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn builder_supplement_does_not_replace_existing() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let env_path = write_env_file(dir.path(), ".env", "TEST_BLD_SUPP=from_file\n");
+
+        temp_env::with_vars([("TEST_BLD_SUPP", Some("original"))], || {
+            DotenvLoader::new()
+                .supplement(&env_path)
+                .load()
+                .unwrap_or_else(|err| panic!("loader failed: {err}"));
+            assert_eq!(std::env::var("TEST_BLD_SUPP").ok(), Some("original".to_owned()));
+        });
+    }
+
+    #[test]
+    fn builder_supplement_sets_missing_vars() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let env_path = write_env_file(dir.path(), ".env", "TEST_BLD_SUPP_NEW=from_file\n");
+
+        temp_env::with_vars([("TEST_BLD_SUPP_NEW", None::<&str>)], || {
+            DotenvLoader::new()
+                .supplement(&env_path)
+                .load()
+                .unwrap_or_else(|err| panic!("loader failed: {err}"));
+            assert_eq!(std::env::var("TEST_BLD_SUPP_NEW").ok(), Some("from_file".to_owned()));
+        });
+    }
+
+    #[test]
+    fn builder_per_entry_override_beats_global_default() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let base = write_env_file(dir.path(), ".env", "TEST_BLD_BEAT=from_base\n");
+        let local = write_env_file(dir.path(), ".env.local", "TEST_BLD_BEAT=from_local\n");
+
+        // global default is no-override, but .env.local uses override_path — local should win
+        temp_env::with_vars([("TEST_BLD_BEAT", None::<&str>)], || {
+            DotenvLoader::new()
+                .path(&base)
+                .override_path(&local)
+                .load()
+                .unwrap_or_else(|err| panic!("loader failed: {err}"));
+            assert_eq!(std::env::var("TEST_BLD_BEAT").ok(), Some("from_local".to_owned()));
+        });
+    }
+
+    #[test]
+    fn builder_supplement_beats_global_override() {
+        let dir = tempfile::tempdir().unwrap_or_else(|err| panic!("failed to create tempdir: {err}"));
+        let base = write_env_file(dir.path(), ".env", "TEST_BLD_SUPP_BEAT=base\n");
+        let local = write_env_file(dir.path(), ".env.local", "TEST_BLD_SUPP_BEAT=local\n");
+
+        // global default is override, but .env.local uses supplement — base should win
+        temp_env::with_vars([("TEST_BLD_SUPP_BEAT", None::<&str>)], || {
+            DotenvLoader::new()
+                .override_existing()
+                .path(&base)
+                .supplement(&local)
+                .load()
+                .unwrap_or_else(|err| panic!("loader failed: {err}"));
+            assert_eq!(std::env::var("TEST_BLD_SUPP_BEAT").ok(), Some("base".to_owned()));
         });
     }
 }
