@@ -49,6 +49,28 @@ pub fn resolve_or_else<T: FromEnvStr>(keys: &[&str], default_fn: impl FnOnce() -
     }
 }
 
+pub fn resolve_with<T, E, F>(keys: &[&str], parse_fn: F) -> crate::error::Result<T>
+where
+    E: std::error::Error + Send + Sync + 'static,
+    F: FnOnce(&str) -> std::result::Result<T, E>,
+{
+    for key in keys {
+        if let Ok(raw) = env::var(key) {
+            return parse_fn(&raw).map_err(|source| Error::Parse {
+                key: (*key).to_owned(),
+                expected: std::any::type_name::<T>(),
+                got: raw,
+                source: Box::new(source),
+                location: Location::default(),
+            });
+        }
+    }
+    Err(Error::NotFound {
+        keys: keys.join(", "),
+        location: Location::default(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +176,40 @@ mod tests {
         temp_env::with_vars([("TEST_BOOL_BAD", Some("maybe"))], || {
             let result = resolve::<bool>(&["TEST_BOOL_BAD"]);
             assert!(matches!(result, Err(Error::Parse { .. })));
+        });
+    }
+
+    #[test]
+    fn resolve_with_custom_parser() {
+        temp_env::with_vars([("TEST_RW_HIT", Some("hello world"))], || {
+            let result: crate::error::Result<Vec<String>> = resolve_with(&["TEST_RW_HIT"], |raw| -> std::result::Result<_, std::convert::Infallible> {
+                Ok(raw.split_whitespace().map(str::to_owned).collect())
+            });
+            assert_eq!(result.ok(), Some(vec!["hello".to_owned(), "world".to_owned()]));
+        });
+    }
+
+    #[test]
+    fn resolve_with_not_found() {
+        temp_env::with_vars([("TEST_RW_MISS", None::<&str>)], || {
+            let result = resolve_with::<String, _, _>(&["TEST_RW_MISS"], |raw| -> std::result::Result<_, std::convert::Infallible> { Ok(raw.to_owned()) });
+            assert!(matches!(result, Err(Error::NotFound { .. })));
+        });
+    }
+
+    #[test]
+    fn resolve_with_parse_error() {
+        temp_env::with_vars([("TEST_RW_BAD", Some("not-a-number"))], || {
+            let result = resolve_with(&["TEST_RW_BAD"], |raw| raw.parse::<i32>());
+            assert!(matches!(result, Err(Error::Parse { .. })));
+        });
+    }
+
+    #[test]
+    fn resolve_with_cascade() {
+        temp_env::with_vars([("TEST_RW_CASCADE_A", None::<&str>), ("TEST_RW_CASCADE_B", Some("42"))], || {
+            let result = resolve_with(&["TEST_RW_CASCADE_A", "TEST_RW_CASCADE_B"], |raw| raw.parse::<i32>());
+            assert_eq!(result.ok(), Some(42));
         });
     }
 

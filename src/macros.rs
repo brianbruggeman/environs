@@ -12,6 +12,10 @@ macro_rules! env {
         $crate::resolve_or(&[$($key),+], $default)
             .map_err(|err| err.with_location(file!(), line!()))
     };
+    ($($key:literal),+ , resolve_with = $parse_fn:expr) => {
+        $crate::resolve_with(&[$($key),+], $parse_fn)
+            .map_err(|err| err.with_location(file!(), line!()))
+    };
     ($($key:literal),+) => {
         $crate::resolve(&[$($key),+])
             .map_err(|err| err.with_location(file!(), line!()))
@@ -172,6 +176,79 @@ mod tests {
         temp_env::with_vars([("TEST_MACRO_DFN_LAZY", Some("10"))], || {
             let result: crate::Result<i32> = env!("TEST_MACRO_DFN_LAZY", default_fn = || panic!("should not be called"));
             assert_eq!(result.ok(), Some(10));
+        });
+    }
+
+    #[test]
+    fn resolve_with_custom_parser() {
+        temp_env::with_vars([("TEST_MACRO_PFN", Some("a,b,c"))], || {
+            let result = env!(
+                "TEST_MACRO_PFN",
+                resolve_with = |raw: &str| -> std::result::Result<Vec<String>, std::convert::Infallible> { Ok(raw.split(',').map(str::to_owned).collect()) }
+            );
+            assert_eq!(result.ok(), Some(vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]));
+        });
+    }
+
+    #[test]
+    fn resolve_with_not_found_error() {
+        temp_env::with_vars([("TEST_MACRO_PFN_MISS", None::<&str>)], || {
+            let result = env!(
+                "TEST_MACRO_PFN_MISS",
+                resolve_with = |raw: &str| -> std::result::Result<String, std::convert::Infallible> { Ok(raw.to_owned()) }
+            );
+            assert!(result.is_err());
+        });
+    }
+
+    #[test]
+    fn resolve_with_carries_source_location() {
+        temp_env::with_vars([("TEST_MACRO_PFN_LOC", None::<&str>)], || {
+            let result = env!(
+                "TEST_MACRO_PFN_LOC",
+                resolve_with = |raw: &str| -> std::result::Result<String, std::convert::Infallible> { Ok(raw.to_owned()) }
+            );
+            let err = result.unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("macros.rs:"), "error should contain source file: {msg}");
+        });
+    }
+
+    #[test]
+    fn default_parse_error_carries_location() {
+        temp_env::with_vars([("TEST_MACRO_DEF_PERR", Some("banana"))], || {
+            let result: crate::Result<i32> = env!("TEST_MACRO_DEF_PERR", default = 42);
+            let err = result.unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("macros.rs:"), "error should have source location: {msg}");
+        });
+    }
+
+    #[test]
+    fn default_str_parse_error_carries_location() {
+        temp_env::with_vars([("TEST_MACRO_DSTR_PERR", Some("banana"))], || {
+            let result: crate::Result<i32> = env!("TEST_MACRO_DSTR_PERR", default_str = "42");
+            let err = result.unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("macros.rs:"), "error should have source location: {msg}");
+        });
+    }
+
+    #[test]
+    fn default_fn_parse_error_carries_location() {
+        temp_env::with_vars([("TEST_MACRO_DFN_PERR", Some("banana"))], || {
+            let result: crate::Result<i32> = env!("TEST_MACRO_DFN_PERR", default_fn = || 42i32);
+            let err = result.unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("macros.rs:"), "error should have source location: {msg}");
+        });
+    }
+
+    #[test]
+    fn resolve_with_cascade() {
+        temp_env::with_vars([("TEST_MACRO_PFN_CASCADE_A", None::<&str>), ("TEST_MACRO_PFN_CASCADE_B", Some("99"))], || {
+            let result = env!("TEST_MACRO_PFN_CASCADE_A", "TEST_MACRO_PFN_CASCADE_B", resolve_with = |raw: &str| raw.parse::<i32>());
+            assert_eq!(result.ok(), Some(99));
         });
     }
 }
