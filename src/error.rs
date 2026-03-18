@@ -140,4 +140,11 @@ mod tests {
         .with_location("src/main.rs", 5);
         assert!(matches!(err, Error::DotenvLoad { .. }));
     }
+
+    #[test]
+    fn location_new_equals_struct_literal() {
+        let loc = Location::new("src/main.rs", 42);
+        assert_eq!(loc.file, "src/main.rs");
+        assert_eq!(loc.line, 42);
+    }
 }

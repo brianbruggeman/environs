@@ -433,6 +433,33 @@ mod tests {
         assert_eq!(err.index, 2);
     }
 
+    #[test]
+    fn bool_parse_error_display() {
+        let err = bool::from_env_str("maybe").unwrap_err();
+        assert_eq!(err.to_string(), "cannot parse 'maybe' as boolean");
+    }
+
+    #[test]
+    fn string_type_name() {
+        assert_eq!(<String as FromEnvStr>::type_name(), "String");
+    }
+
+    #[test]
+    fn pathbuf_type_name() {
+        assert_eq!(<PathBuf as FromEnvStr>::type_name(), "PathBuf");
+    }
+
+    #[test]
+    fn vec_type_name() {
+        assert_eq!(<Vec<i32> as FromEnvStr>::type_name(), "Vec");
+    }
+
+    #[test]
+    fn vec_parse_error_has_source() {
+        let err = Vec::<i32>::from_env_str("1,banana,3").unwrap_err();
+        assert!(std::error::Error::source(&err).is_some());
+    }
+
     #[cfg(feature = "chrono")]
     mod chrono_tests {
         use rstest::rstest;
